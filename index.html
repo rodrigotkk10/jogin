@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Space Impact Deluxe</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: 'Courier New', Courier, monospace;
+      color: white;
+    }
+    canvas {
+      display: block;
+      background: #000;
+      border: 1px solid lime;
+      cursor: pointer;
+    }
+    #instructions {
+        position: absolute;
+        top: 10px;
+        font-size: 12px;
+        text-align: center;
+        width: 100%;
+        display: none; /* Começa escondido */
+    }
+  </style>
+</head>
+<body>
+
+<div id="instructions">Use o teclado ou toque na tela para jogar! (Esquerda para mover, Direita para atirar)</div>
+<canvas id="game"></canvas>
+
+<!-- Biblioteca para gerar sons em tempo real -->
+<script src="https://sfxr.me/jsfxr.js"></script>
+
+<script>
+  const canvas = document.getElementById('game' );
+  const ctx = canvas.getContext('2d');
+  const instructions = document.getElementById('instructions');
+  canvas.width = 480;
+  canvas.height = 320;
+
+  // --- CONFIGURAÇÕES DE ÁUDIO ---
+  let audioReady = false;
+  const sounds = {};
+
+  // Função para carregar sons de forma segura
+  function loadAudio() {
+      try {
+        sounds.shoot = jsfxr.sfxr_to_url([0,,0.0724,,0.266,0.522,,0.208,,,,,,,,,,,1,,,,,0.5]);
+        sounds.explosion = jsfxr.sfxr_to_url([3,,0.25,0.6,0.29,0.07,,-0.34,,,,,,0.42,0.02,,,,1,,,,,0.5]);
+        sounds.powerup = jsfxr.sfxr_to_url([1,,0.16,0.4,0.23,0.57,,0.12,,,,,,0.18,,,,,1,,,,,0.5]);
+        sounds.hit = jsfxr.sfxr_to_url([0,,0.13,0.8,0.2,0.03,,-0.4,,,,,,,,,,,1,,,,,0.5]);
+        
+        const bossMusic = new Audio("https://www.fesliyanstudios.com/music/download/8-bit-boss-battle/295" );
+        bossMusic.loop = true;
+        bossMusic.volume = 0.5;
+        sounds.bossMusic = bossMusic;
+      } catch (e) {
+          console.error("Falha ao inicializar o gerador de áudio (jsfxr). O jogo continuará sem som.", e);
+      }
+  }
+
+  function playSound(soundUrl) {
+      if (!audioReady || !soundUrl) return;
+      (new Audio(soundUrl)).play().catch(e => {});
+  }
+
+  // --- ASSETS ---
+  const playerSprite = '🛸';
+  const enemySprite1 = '👾';
+  const enemySprite2 = '👽';
+  const bulletSprite = '➖';
+  const explosionSprite = '💥';
+  const powerUpSprite = { 'doubleShot': '✨', 'shield': '🛡️' };
+  const bossSprite = '👹';
+
+  const keys = {};
+  let score = 0;
+  let gameState = 'start';
+  let bossActive = false;
+
+  const player = {
+    x: 30, y: canvas.height / 2 - 15, width: 30, height: 30, speed: 4,
+    bullets: [], cooldown: 0, lives: 3, isHit: false, hitTimer: 0,
+    powerUp: null, powerUpTimer: 0, shieldActive: false,
+    shoot() {
+      if (this.cooldown === 0) {
+        playSound(sounds.shoot);
+        const baseBullet = { x: this.x + this.width, y: this.y + this.height / 2 - 5, width: 20, height: 10 };
+        this.bullets.push(baseBullet);
+        
+        if (this.powerUp === 'doubleShot') {
+            const secondBullet = { ...baseBullet, y: baseBullet.y - 15 };
+            const thirdBullet = { ...baseBullet, y: baseBullet.y + 15 };
+            this.bullets.push(secondBullet, thirdBullet);
+        }
+        this.cooldown = this.powerUp === 'doubleShot' ? 25 : 15;
+      }
+    },
+    reset() {
+        this.x = 30; this.y = canvas.height / 2 - 15; this.lives = 3;
+        this.bullets = []; this.isHit = false; this.hitTimer = 0;
+        this.powerUp = null; this.powerUpTimer = 0; this.shieldActive = false;
+    }
+  };
+
+  let enemies = [];
+  let explosions = [];
+  let powerUps = [];
+  let enemyInterval;
+
+  const boss = {
+      x: canvas.width, y: canvas.height / 2 - 50, width: 100, height: 100,
+      speedX: 0.5, speedY: 1, health: 50, maxHealth: 50,
+      active: false, phase: 'entering', phaseTimer: 180,
+      bullets: [], shootCooldown: 0,
+      reset() {
+          this.x = canvas.width; this.y = canvas.height / 2 - 50;
+          this.active = true; this.health = 50; this.phase = 'entering';
+          this.phaseTimer = 180; this.bullets = []; bossActive = true;
+          if (audioReady && sounds.bossMusic) {
+              sounds.bossMusic.currentTime = 0;
+              sounds.bossMusic.play().catch(e => {});
+          }
+      }
+  };
+
+  function startGame() {
+      gameState = 'playing';
+      instructions.style.display = 'block';
+      score = 0;
+      enemies = [];
+      explosions = [];
+      powerUps = [];
+      player.reset();
+      boss.active = false;
+      bossActive = false;
+      if (sounds.bossMusic) sounds.bossMusic.pause();
+      clearInterval(enemyInterval);
+      enemyInterval = setInterval(spawnEnemy, 1500);
+  }
+
+  function spawnEnemy() {
+    if (bossActive) return;
+    const y = Math.random() * (canvas.height - 30);
+    const type = Math.random() > 0.3 ? 'normal' : 'wavy';
+    const sprite = type === 'normal' ? enemySprite1 : enemySprite2;
+    const health = type === 'normal' ? 1 : 2;
+    enemies.push({ x: canvas.width, y, width: 30, height: 30, speedX: type === 'normal' ? 2 : 1.5, speedY: 1, type, sprite, health });
+  }
+
+  function spawnPowerUp(x, y) {
+      const type = Math.random() > 0.5 ? 'doubleShot' : 'shield';
+      powerUps.push({ x, y, width: 30, height: 30, type, sprite: powerUpSprite[type] });
+  }
+
+  function createExplosion(x, y, size = 30) {
+      playSound(sounds.explosion);
+      explosions.push({ x, y, size, timer: 20 });
+  }
+
+  function update() {
+    if (gameState !== 'playing') return;
+
+    if (keys['ArrowUp'] && player.y > 0) player.y -= player.speed;
+    if (keys['ArrowDown'] && player.y + player.height < canvas.height) player.y += player.speed;
+    if (keys[' '] || keys['Spacebar']) player.shoot();
+    if (player.cooldown > 0) player.cooldown--;
+
+    if (player.isHit) {
+        player.hitTimer--;
+        if (player.hitTimer <= 0) player.isHit = false;
+    }
+    if (player.powerUpTimer > 0) {
+        player.powerUpTimer--;
+        if (player.powerUpTimer <= 0) {
+            player.powerUp = null;
+            player.shieldActive = false;
+        }
+    }
+
+    for (let i = player.bullets.length - 1; i >= 0; i--) {
+      const b = player.bullets[i];
+      b.x += 8;
+      if (b.x > canvas.width) player.bullets.splice(i, 1);
+    }
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.x -= e.speedX;
+      if (e.type === 'wavy') {
+          e.y += e.speedY;
+          if (e.y <= 0 || e.y + e.height >= canvas.height) e.speedY *= -1;
+      }
+      if (e.x + e.width < 0) enemies.splice(i, 1);
+    }
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        const p = powerUps[i];
+        p.x -= 1.5;
+        if (p.x + p.width < 0) powerUps.splice(i, 1);
+    }
+    for (let i = explosions.length - 1; i >= 0; i--) {
+        explosions[i].timer--;
+        if (explosions[i].timer <= 0) explosions.splice(i, 1);
+    }
+
+    if (score >= 200 && !boss.active && !bossActive) {
+        boss.reset();
+        enemies = [];
+        clearInterval(enemyInterval);
+    }
+
+    if (boss.active) {
+        if (boss.phase === 'entering') {
+            boss.x -= boss.speedX;
+            if (boss.x <= canvas.width - boss.width - 20) {
+                boss.x = canvas.width - boss.width - 20;
+                boss.phase = 'fighting';
+            }
+        } else if (boss.phase === 'fighting') {
+            boss.y += boss.speedY;
+            if (boss.y <= 0 || boss.y + boss.height >= canvas.height) boss.speedY *= -1;
+            
+            boss.shootCooldown--;
+            if (boss.shootCooldown <= 0) {
+                const bullet = { x: boss.x, y: boss.y + boss.height / 2, width: 20, height: 10, speedX: -4 };
+                boss.bullets.push(bullet);
+                boss.shootCooldown = 90;
+            }
+        }
+        for (let i = boss.bullets.length - 1; i >= 0; i--) {
+            const b = boss.bullets[i];
+            b.x += b.speedX;
+            if (b.x + b.width < 0) boss.bullets.splice(i, 1);
+        }
+    }
+
+    for (let bi = player.bullets.length - 1; bi >= 0; bi--) {
+      const b = player.bullets[bi];
+      for (let ei = enemies.length - 1; ei >= 0; ei--) {
+        const e = enemies[ei];
+        if (b.x < e.x + e.width && b.x + b.width > e.x && b.y < e.y + e.height && b.y + b.height > e.y) {
+          player.bullets.splice(bi, 1);
+          e.health--;
+          if (e.health <= 0) {
+              createExplosion(e.x, e.y);
+              enemies.splice(ei, 1);
+              score += 10;
+              if (Math.random() < 0.2) spawnPowerUp(e.x, e.y);
+          }
+          break;
+        }
+      }
+    }
+    if (boss.active) {
+        for (let i = player.bullets.length - 1; i >= 0; i--) {
+            const b = player.bullets[i];
+            if (b.x < boss.x + boss.width && b.x + b.width > boss.x && b.y < boss.y + boss.height && b.y + b.height > boss.y) {
+                player.bullets.splice(i, 1);
+                boss.health--;
+                score += 5;
+                if (boss.health <= 0) {
+                    createExplosion(boss.x, boss.y, boss.width);
+                    boss.active = false;
+                    bossActive = false;
+                    if (sounds.bossMusic) sounds.bossMusic.pause();
+                    score += 500;
+                    enemyInterval = setInterval(spawnEnemy, 1500);
+                }
+                break;
+            }
+        }
+    }
+
+    if (!player.isHit) {
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const e = enemies[i];
+            if (e.x < player.x + player.width && e.x + e.width > player.x && e.y < player.y + player.height && e.y + e.height > player.y) {
+                handlePlayerHit();
+                enemies.splice(i, 1);
+                break;
+            }
+        }
+        for (let i = boss.bullets.length - 1; i >= 0; i--) {
+            const b = boss.bullets[i];
+            if (b.x < player.x + player.width && b.x + b.width > player.x && b.y < player.y + player.height && b.y + b.height > player.y) {
+                handlePlayerHit();
+                boss.bullets.splice(i, 1);
+                break;
+            }
+        }
+    }
+    
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        const p = powerUps[i];
+        if (p.x < player.x + player.width && p.x + p.width > player.x && p.y < player.y + player.height && p.y + p.height > player.y) {
+            playSound(sounds.powerup);
+            player.powerUp = p.type;
+            player.powerUpTimer = 600;
+            if (p.type === 'shield') player.shieldActive = true;
+            powerUps.splice(i, 1);
+        }
+    }
+  }
+
+  function handlePlayerHit() {
+      if (player.shieldActive) {
+          player.shieldActive = false;
+          player.powerUp = null;
+          player.powerUpTimer = 0;
+          return;
+      }
+      playSound(sounds.hit);
+      createExplosion(player.x, player.y);
+      player.lives--;
+      player.isHit = true;
+      player.hitTimer = 120;
+      if (player.lives <= 0) {
+          gameState = 'gameOver';
+          instructions.style.display = 'none';
+          if (sounds.bossMusic) sounds.bossMusic.pause();
+          clearInterval(enemyInterval);
+      }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (gameState === 'start') {
+        drawText('Space Impact Deluxe', canvas.width / 2, canvas.height / 2 - 40, 'lime', 30);
+        drawText('Clique ou Toque para Iniciar', canvas.width / 2, canvas.height / 2 + 20, 'white', 16);
+        return;
+    }
+    
+    if (gameState === 'gameOver') {
+        drawText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40, 'red', 40);
+        drawText(`Pontuação final: ${score}`, canvas.width / 2, canvas.height / 2 + 10, 'white', 20);
+        drawText('Clique ou Toque para jogar novamente', canvas.width / 2, canvas.height / 2 + 50, 'white', 16);
+        return;
+    }
+
+    if (!player.isHit || (player.isHit && player.hitTimer % 20 < 10)) {
+        drawSprite(playerSprite, player.x, player.y, 30);
+        if (player.shieldActive) {
+            ctx.strokeStyle = 'cyan';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(player.x + player.width / 2, player.y + player.height / 2, player.width * 0.8, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+    for (const b of player.bullets) drawSprite(bulletSprite, b.x, b.y, 20);
+    for (const e of enemies) drawSprite(e.sprite, e.x, e.y, 30);
+    for (const p of powerUps) drawSprite(p.sprite, p.x, p.y, 30);
+    for (const ex of explosions) drawSprite(explosionSprite, ex.x, ex.y, ex.size);
+    
+    if (boss.active) {
+        drawSprite(bossSprite, boss.x, boss.y, boss.width);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(boss.x, boss.y - 15, boss.width, 10);
+        ctx.fillStyle = 'lime';
+        ctx.fillRect(boss.x, boss.y - 15, boss.width * (boss.health / boss.maxHealth), 10);
+        
+        ctx.fillStyle = 'orange';
+        for (const b of boss.bullets) ctx.fillRect(b.x, b.y, b.width, b.height);
+    }
+
+    drawText('Pontos: ' + score, 10, 20, 'white', 16, 'left');
+    drawText('Vidas: ' + playerSprite.repeat(player.lives), canvas.width - 10, 20, 'lime', 16, 'right');
+    if (player.powerUp) {
+        const timeBarWidth = 100 * (player.powerUpTimer / 600);
+        drawText(powerUpSprite[player.powerUp], canvas.width / 2 - 60, 20, 'yellow', 16, 'center');
+        ctx.fillStyle = 'yellow';
+        ctx.fillRect(canvas.width / 2 - 50, 10, timeBarWidth, 10);
+    }
+  }
+
+  function drawSprite(sprite, x, y, size) {
+      ctx.font = `${size}px Arial`;
+      ctx.fillText(sprite, x, y + size * 0.8);
+  }
+
+  function drawText(text, x, y, color, size, align = 'center') {
+      ctx.fillStyle = color;
+      ctx.font = `${size}px 'Courier New', Courier, monospace`;
+      ctx.textAlign = align;
+      ctx.fillText(text, x, y);
+      ctx.textAlign = 'left';
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function handleInteraction(e) {
+      if (!audioReady) {
+          audioReady = true;
+          loadAudio();
+      }
+      if (gameState === 'start' || gameState === 'gameOver') {
+          startGame();
+      }
+  }
+
+  document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') handleInteraction();
+      keys[e.key] = true;
+  });
+  document.addEventListener('keyup', e => keys[e.key] = false);
+
+  let touchY = '';
+  canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      handleInteraction();
+      if (gameState !== 'playing') return;
+      
+      const touch = e.touches[0];
+      if (touch.clientX < canvas.offsetWidth / 2) {
+          touchY = touch.clientY;
+      } else {
+          player.shoot();
+      }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (gameState !== 'playing' || e.touches[0].clientX >= canvas.offsetWidth / 2) return;
+      
+      const newTouchY = e.touches[0].clientY;
+      if (newTouchY < touchY) player.y -= player.speed;
+      else if (newTouchY > touchY) player.y += player.speed;
+      player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+      touchY = newTouchY;
+  }, { passive: false });
+
+  // Inicia o loop do jogo.
+  loop();
+</script>
+</body>
+</html>
