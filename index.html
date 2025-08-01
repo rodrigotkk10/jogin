@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Space Impact Deluxe</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: black;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Courier New', Courier, monospace;
+      color: white;
+    }
+    
+    #gameContainer {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      max-width: 800px;
+      max-height: 600px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    canvas {
+      display: block;
+      background: #000;
+      border: 2px solid lime;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+    }
+    
+    #instructions {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: clamp(10px, 2.5vw, 14px);
+      text-align: center;
+      width: 90%;
+      display: none;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 5px 10px;
+      border-radius: 5px;
+    }
+    
+    #touchControls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: none;
+      gap: 20px;
+      z-index: 10;
+    }
+    
+    .touchButton {
+      background: rgba(0, 255, 0, 0.3);
+      border: 2px solid lime;
+      color: white;
+      padding: 15px 20px;
+      border-radius: 10px;
+      font-size: 16px;
+      font-family: 'Courier New', Courier, monospace;
+      cursor: pointer;
+      user-select: none;
+      touch-action: manipulation;
+    }
+    
+    .touchButton:active {
+      background: rgba(0, 255, 0, 0.6);
+    }
+    
+    /* Media queries para diferentes tamanhos de tela */
+    @media (max-width: 768px) {
+      #gameContainer {
+        width: 100vw;
+        height: 100vh;
+        max-width: none;
+        max-height: none;
+      }
+      
+      canvas {
+        border-width: 1px;
+      }
+      
+      #instructions {
+        font-size: 12px;
+        top: 5px;
+      }
+      
+      #touchControls {
+        display: flex;
+        bottom: 10px;
+      }
+      
+      .touchButton {
+        padding: 12px 16px;
+        font-size: 14px;
+      }
+    }
+    
+    @media (max-width: 480px) {
+      #instructions {
+        font-size: 10px;
+        padding: 3px 8px;
+      }
+      
+      .touchButton {
+        padding: 10px 14px;
+        font-size: 12px;
+      }
+      
+      #touchControls {
+        gap: 15px;
+        bottom: 5px;
+      }
+    }
+    
+    @media (orientation: landscape) and (max-height: 500px) {
+      #instructions {
+        top: 2px;
+        font-size: 10px;
+      }
+      
+      #touchControls {
+        bottom: 5px;
+      }
+      
+      .touchButton {
+        padding: 8px 12px;
+        font-size: 11px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div id="gameContainer">
+  <div id="instructions">Use o teclado ou toque na tela para jogar! (Setas para mover, Espaço para atirar)</div>
+  <canvas id="game"></canvas>
+  <div id="touchControls">
+    <button class="touchButton" id="moveUpBtn">↑</button>
+    <button class="touchButton" id="moveDownBtn">↓</button>
+    <button class="touchButton" id="shootBtn">🚀</button>
+  </div>
+</div>
+
+<!-- Biblioteca para gerar sons em tempo real -->
+<script src="https://sfxr.me/jsfxr.js"></script>
+
+<script>
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const instructions = document.getElementById('instructions');
+  const gameContainer = document.getElementById('gameContainer');
+  
+  // Função para redimensionar o canvas responsivamente
+  function resizeCanvas() {
+    const container = gameContainer;
+    const containerWidth = container.clientWidth;
+    const containerHeight = container.clientHeight;
+    
+    // Proporção 3:2 (similar ao original 480x320)
+    const aspectRatio = 3 / 2;
+    
+    let canvasWidth, canvasHeight;
+    
+    if (containerWidth / containerHeight > aspectRatio) {
+      // Container é mais largo, limitar pela altura
+      canvasHeight = containerHeight - 40; // margem para controles
+      canvasWidth = canvasHeight * aspectRatio;
+    } else {
+      // Container é mais alto, limitar pela largura
+      canvasWidth = containerWidth - 20; // margem lateral
+      canvasHeight = canvasWidth / aspectRatio;
+    }
+    
+    // Garantir tamanhos mínimos
+    canvasWidth = Math.max(320, canvasWidth);
+    canvasHeight = Math.max(240, canvasHeight);
+    
+    // Garantir tamanhos máximos
+    canvasWidth = Math.min(800, canvasWidth);
+    canvasHeight = Math.min(600, canvasHeight);
+    
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    
+    // Atualizar posição do jogador se necessário
+    if (player && player.y + player.height > canvas.height) {
+      player.y = canvas.height / 2 - player.height / 2;
+    }
+  }
+  
+  // Redimensionar no carregamento e quando a janela muda de tamanho
+  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('orientationchange', () => {
+    setTimeout(resizeCanvas, 100);
+  });
+  
+  // Configuração inicial
+  resizeCanvas();
+
+  // --- CONFIGURAÇÕES DE ÁUDIO ---
+  let audioReady = false;
+  const sounds = {};
+
+  // Função para carregar sons de forma segura
+  function loadAudio() {
+      try {
+        sounds.shoot = jsfxr.sfxr_to_url([0,,0.0724,,0.266,0.522,,0.208,,,,,,,,,,,1,,,,,0.5]);
+        sounds.explosion = jsfxr.sfxr_to_url([3,,0.25,0.6,0.29,0.07,,-0.34,,,,,,0.42,0.02,,,,1,,,,,0.5]);
+        sounds.powerup = jsfxr.sfxr_to_url([1,,0.16,0.4,0.23,0.57,,0.12,,,,,,0.18,,,,,1,,,,,0.5]);
+        sounds.hit = jsfxr.sfxr_to_url([0,,0.13,0.8,0.2,0.03,,-0.4,,,,,,,,,,,1,,,,,0.5]);
+        
+        const bossMusic = new Audio("https://www.fesliyanstudios.com/music/download/8-bit-boss-battle/295");
+        bossMusic.loop = true;
+        bossMusic.volume = 0.5;
+        sounds.bossMusic = bossMusic;
+      } catch (e) {
+          console.error("Falha ao inicializar o gerador de áudio (jsfxr). O jogo continuará sem som.", e);
+      }
+  }
+
+  function playSound(soundUrl) {
+      if (!audioReady || !soundUrl) return;
+      (new Audio(soundUrl)).play().catch(e => {});
+  }
+
+  // --- ASSETS ---
+  const playerSprite = '🛸';
+  const enemySprite1 = '👾';
+  const enemySprite2 = '👽';
+  const bulletSprite = '➖';
+  const explosionSprite = '💥';
+  const powerUpSprite = { 'doubleShot': '✨', 'shield': '🛡️' };
+  const bossSprite = '👹';
+
+  const keys = {};
+  let score = 0;
+  let gameState = 'start';
+  let bossActive = false;
+
+  const player = {
+    x: 30, y: 0, width: 30, height: 30, speed: 4,
+    bullets: [], cooldown: 0, lives: 3, isHit: false, hitTimer: 0,
+    powerUp: null, powerUpTimer: 0, shieldActive: false,
+    shoot() {
+      if (this.cooldown === 0) {
+        playSound(sounds.shoot);
+        const baseBullet = { x: this.x + this.width, y: this.y + this.height / 2 - 5, width: 20, height: 10 };
+        this.bullets.push(baseBullet);
+        
+        if (this.powerUp === 'doubleShot') {
+            const secondBullet = { ...baseBullet, y: baseBullet.y - 15 };
+            const thirdBullet = { ...baseBullet, y: baseBullet.y + 15 };
+            this.bullets.push(secondBullet, thirdBullet);
+        }
+        this.cooldown = this.powerUp === 'doubleShot' ? 25 : 15;
+      }
+    },
+    reset() {
+        this.x = 30; 
+        this.y = canvas.height / 2 - 15; 
+        this.lives = 3;
+        this.bullets = []; 
+        this.isHit = false; 
+        this.hitTimer = 0;
+        this.powerUp = null; 
+        this.powerUpTimer = 0; 
+        this.shieldActive = false;
+    }
+  };
+
+  let enemies = [];
+  let explosions = [];
+  let powerUps = [];
+  let enemyInterval;
+
+  const boss = {
+      x: 0, y: 0, width: 100, height: 100,
+      speedX: 0.5, speedY: 1, health: 50, maxHealth: 50,
+      active: false, phase: 'entering', phaseTimer: 180,
+      bullets: [], shootCooldown: 0,
+      reset() {
+          this.x = canvas.width; 
+          this.y = canvas.height / 2 - 50;
+          this.active = true; 
+          this.health = 50; 
+          this.phase = 'entering';
+          this.phaseTimer = 180; 
+          this.bullets = []; 
+          bossActive = true;
+          if (audioReady && sounds.bossMusic) {
+              sounds.bossMusic.currentTime = 0;
+              sounds.bossMusic.play().catch(e => {});
+          }
+      }
+  };
+
+  function startGame() {
+      gameState = 'playing';
+      instructions.style.display = 'block';
+      score = 0;
+      enemies = [];
+      explosions = [];
+      powerUps = [];
+      player.reset();
+      boss.active = false;
+      bossActive = false;
+      if (sounds.bossMusic) sounds.bossMusic.pause();
+      clearInterval(enemyInterval);
+      enemyInterval = setInterval(spawnEnemy, 1500);
+  }
+
+  function spawnEnemy() {
+    if (bossActive) return;
+    const y = Math.random() * (canvas.height - 30);
+    const type = Math.random() > 0.3 ? 'normal' : 'wavy';
+    const sprite = type === 'normal' ? enemySprite1 : enemySprite2;
+    const health = type === 'normal' ? 1 : 2;
+    const speed = Math.min(2, canvas.width / 240); // Velocidade proporcional ao tamanho
+    enemies.push({ 
+      x: canvas.width, y, width: 30, height: 30, 
+      speedX: type === 'normal' ? speed : speed * 0.75, 
+      speedY: 1, type, sprite, health 
+    });
+  }
+
+  function spawnPowerUp(x, y) {
+      const type = Math.random() > 0.5 ? 'doubleShot' : 'shield';
+      powerUps.push({ x, y, width: 30, height: 30, type, sprite: powerUpSprite[type] });
+  }
+
+  function createExplosion(x, y, size = 30) {
+      playSound(sounds.explosion);
+      explosions.push({ x, y, size, timer: 20 });
+  }
+
+  function update() {
+    if (gameState !== 'playing') return;
+
+    // Velocidade proporcional ao tamanho da tela
+    const speedMultiplier = Math.min(1, canvas.width / 480);
+    const currentSpeed = player.speed * speedMultiplier;
+
+    if (keys['ArrowUp'] && player.y > 0) player.y -= currentSpeed;
+    if (keys['ArrowDown'] && player.y + player.height < canvas.height) player.y += currentSpeed;
+    if (keys[' '] || keys['Spacebar']) player.shoot();
+    if (player.cooldown > 0) player.cooldown--;
+
+    if (player.isHit) {
+        player.hitTimer--;
+        if (player.hitTimer <= 0) player.isHit = false;
+    }
+    if (player.powerUpTimer > 0) {
+        player.powerUpTimer--;
+        if (player.powerUpTimer <= 0) {
+            player.powerUp = null;
+            player.shieldActive = false;
+        }
+    }
+
+    // Velocidade das balas proporcional ao tamanho
+    const bulletSpeed = 8 * speedMultiplier;
+    for (let i = player.bullets.length - 1; i >= 0; i--) {
+      const b = player.bullets[i];
+      b.x += bulletSpeed;
+      if (b.x > canvas.width) player.bullets.splice(i, 1);
+    }
+    
+    for (let i = enemies.length - 1; i >= 0; i--) {
+      const e = enemies[i];
+      e.x -= e.speedX;
+      if (e.type === 'wavy') {
+          e.y += e.speedY;
+          if (e.y <= 0 || e.y + e.height >= canvas.height) e.speedY *= -1;
+      }
+      if (e.x + e.width < 0) enemies.splice(i, 1);
+    }
+    
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        const p = powerUps[i];
+        p.x -= 1.5 * speedMultiplier;
+        if (p.x + p.width < 0) powerUps.splice(i, 1);
+    }
+    
+    for (let i = explosions.length - 1; i >= 0; i--) {
+        explosions[i].timer--;
+        if (explosions[i].timer <= 0) explosions.splice(i, 1);
+    }
+
+    if (score >= 200 && !boss.active && !bossActive && score < 700) { // Adicionado limite de score para o boss
+        boss.reset();
+        enemies = [];
+        clearInterval(enemyInterval);
+    }
+
+    if (boss.active) {
+        if (boss.phase === 'entering') {
+            boss.x -= boss.speedX * speedMultiplier;
+            if (boss.x <= canvas.width - boss.width - 20) {
+                boss.x = canvas.width - boss.width - 20;
+                boss.phase = 'fighting';
+            }
+        } else if (boss.phase === 'fighting') {
+            boss.y += boss.speedY;
+            if (boss.y <= 0 || boss.y + boss.height >= canvas.height) boss.speedY *= -1;
+            
+            boss.shootCooldown--;
+            if (boss.shootCooldown <= 0) {
+                const bullet = { x: boss.x, y: boss.y + boss.height / 2, width: 20, height: 10, speedX: -4 * speedMultiplier };
+                boss.bullets.push(bullet);
+                boss.shootCooldown = 90;
+            }
+        }
+        for (let i = boss.bullets.length - 1; i >= 0; i--) {
+            const b = boss.bullets[i];
+            b.x += b.speedX;
+            if (b.x + b.width < 0) boss.bullets.splice(i, 1);
+        }
+    }
+
+    // Colisões (mantidas iguais)
+    for (let bi = player.bullets.length - 1; bi >= 0; bi--) {
+      const b = player.bullets[bi];
+      for (let ei = enemies.length - 1; ei >= 0; ei--) {
+        const e = enemies[ei];
+        if (b.x < e.x + e.width && b.x + b.width > e.x && b.y < e.y + e.height && b.y + b.height > e.y) {
+          player.bullets.splice(bi, 1);
+          e.health--;
+          if (e.health <= 0) {
+              createExplosion(e.x, e.y);
+              enemies.splice(ei, 1);
+              score += 10;
+              if (Math.random() < 0.2) spawnPowerUp(e.x, e.y);
+          }
+          break;
+        }
+      }
+    }
+    
+    if (boss.active) {
+        for (let i = player.bullets.length - 1; i >= 0; i--) {
+            const b = player.bullets[i];
+            if (b.x < boss.x + boss.width && b.x + b.width > boss.x && b.y < boss.y + boss.height && b.y + b.height > boss.y) {
+                player.bullets.splice(i, 1);
+                boss.health--;
+                score += 5;
+                if (boss.health <= 0) {
+                    createExplosion(boss.x, boss.y, boss.width);
+                    boss.active = false;
+                    bossActive = false;
+                    if (sounds.bossMusic) sounds.bossMusic.pause();
+                    score += 500;
+                    enemyInterval = setInterval(spawnEnemy, 1500);
+                    boss.active = false; // Garante que o boss não reapareça imediatamente
+                    bossActive = false; // Garante que o boss não reapareça imediatamente
+                }
+                break;
+            }
+        }
+    }
+
+    if (!player.isHit) {
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            const e = enemies[i];
+            if (e.x < player.x + player.width && e.x + e.width > player.x && e.y < player.y + player.height && e.y + e.height > player.y) {
+                handlePlayerHit();
+                enemies.splice(i, 1);
+                break;
+            }
+        }
+        for (let i = boss.bullets.length - 1; i >= 0; i--) {
+            const b = boss.bullets[i];
+            if (b.x < player.x + player.width && b.x + b.width > player.x && b.y < player.y + player.height && b.y + b.height > player.y) {
+                handlePlayerHit();
+                boss.bullets.splice(i, 1);
+                break;
+            }
+        }
+    }
+    
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+        const p = powerUps[i];
+        if (p.x < player.x + player.width && p.x + p.width > player.x && p.y < player.y + player.height && p.y + p.height > player.y) {
+            playSound(sounds.powerup);
+            player.powerUp = p.type;
+            player.powerUpTimer = 600;
+            if (p.type === 'shield') player.shieldActive = true;
+            powerUps.splice(i, 1);
+        }
+    }
+  }
+
+  function handlePlayerHit() {
+      if (player.shieldActive) {
+          player.shieldActive = false;
+          player.powerUp = null;
+          player.powerUpTimer = 0;
+          return;
+      }
+      playSound(sounds.hit);
+      createExplosion(player.x, player.y);
+      player.lives--;
+      player.isHit = true;
+      player.hitTimer = 120;
+      if (player.lives <= 0) {
+          gameState = 'gameOver';
+          instructions.style.display = 'none';
+          if (sounds.bossMusic) sounds.bossMusic.pause();
+          clearInterval(enemyInterval);
+      }
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Tamanho da fonte proporcional ao canvas
+    const baseFontSize = Math.min(canvas.width / 20, canvas.height / 15);
+
+    if (gameState === 'start') {
+        drawText('Space Impact Deluxe', canvas.width / 2, canvas.height / 2 - 40, 'lime', baseFontSize * 1.5);
+        drawText('Clique ou Toque para Iniciar', canvas.width / 2, canvas.height / 2 + 20, 'white', baseFontSize * 0.8);
+        return;
+    }
+    
+    if (gameState === 'gameOver') {
+        drawText('GAME OVER', canvas.width / 2, canvas.height / 2 - 40, 'red', baseFontSize * 2);
+        drawText(`Pontuação final: ${score}`, canvas.width / 2, canvas.height / 2 + 10, 'white', baseFontSize);
+        drawText('Clique ou Toque para jogar novamente', canvas.width / 2, canvas.height / 2 + 50, 'white', baseFontSize * 0.8);
+        return;
+    }
+
+    // Tamanho dos sprites proporcional ao canvas
+    const spriteSize = Math.min(30, canvas.width / 16);
+
+    if (!player.isHit || (player.isHit && player.hitTimer % 20 < 10)) {
+        drawSprite(playerSprite, player.x, player.y, spriteSize);
+        if (player.shieldActive) {
+            ctx.strokeStyle = 'cyan';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(player.x + player.width / 2, player.y + player.height / 2, player.width * 0.8, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+    }
+    
+    for (const b of player.bullets) drawSprite(bulletSprite, b.x, b.y, spriteSize * 0.7);
+    for (const e of enemies) drawSprite(e.sprite, e.x, e.y, spriteSize);
+    for (const p of powerUps) drawSprite(p.sprite, p.x, p.y, spriteSize);
+    for (const ex of explosions) drawSprite(explosionSprite, ex.x, ex.y, ex.size);
+    
+    if (boss.active) {
+        drawSprite(bossSprite, boss.x, boss.y, boss.width);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(boss.x, boss.y - 15, boss.width, 10);
+        ctx.fillStyle = 'lime';
+        ctx.fillRect(boss.x, boss.y - 15, boss.width * (boss.health / boss.maxHealth), 10);
+        
+        ctx.fillStyle = 'orange';
+        for (const b of boss.bullets) ctx.fillRect(b.x, b.y, b.width, b.height);
+    }
+
+    drawText('Pontos: ' + score, 10, 20, 'white', baseFontSize * 0.8, 'left');
+    drawText('Vidas: ' + playerSprite.repeat(player.lives), canvas.width - 10, 20, 'lime', baseFontSize * 0.8, 'right');
+    
+    if (player.powerUp) {
+        const timeBarWidth = 100 * (player.powerUpTimer / 600);
+        drawText(powerUpSprite[player.powerUp], canvas.width / 2 - 60, 20, 'yellow', baseFontSize * 0.8, 'center');
+        ctx.fillStyle = 'yellow';
+        ctx.fillRect(canvas.width / 2 - 50, 10, timeBarWidth, 10);
+    }
+  }
+
+  function drawSprite(sprite, x, y, size) {
+      ctx.font = `${size}px Arial`;
+      ctx.fillText(sprite, x, y + size * 0.8);
+  }
+
+  function drawText(text, x, y, color, size, align = 'center') {
+      ctx.fillStyle = color;
+      ctx.font = `${size}px 'Courier New', Courier, monospace`;
+      ctx.textAlign = align;
+      ctx.fillText(text, x, y);
+      ctx.textAlign = 'left';
+  }
+
+  function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function handleInteraction(e) {
+      if (!audioReady) {
+          audioReady = true;
+          loadAudio();
+      }
+      if (gameState === 'start' || gameState === 'gameOver') {
+          startGame();
+      }
+  }
+
+  // Controles de teclado
+  document.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') handleInteraction();
+      keys[e.key] = true;
+  });
+  document.addEventListener('keyup', e => keys[e.key] = false);
+
+  // Controles touch melhorados
+  let touchStartY = null;
+  let isMoving = false;
+
+  canvas.addEventListener('touchstart', e => {
+      e.preventDefault();
+      handleInteraction();
+      if (gameState !== 'playing') return;
+      
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const touchX = (touch.clientX - rect.left) / rect.width * canvas.width;
+      const touchY = (touch.clientY - rect.top) / rect.height * canvas.height;
+      
+      if (touchX < canvas.width / 2) {
+          touchStartY = touchY;
+          isMoving = true;
+      } else {
+          player.shoot();
+      }
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', e => {
+      e.preventDefault();
+      if (gameState !== 'playing' || !isMoving) return;
+      
+      const touch = e.touches[0];
+      const rect = canvas.getBoundingClientRect();
+      const touchY = (touch.clientY - rect.top) / rect.height * canvas.height;
+      
+      if (touchStartY !== null) {
+          const deltaY = touchY - touchStartY;
+          player.y += deltaY * 0.5; // Suavizar movimento
+          player.y = Math.max(0, Math.min(canvas.height - player.height, player.y));
+          touchStartY = touchY;
+      }
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+      e.preventDefault();
+      isMoving = false;
+      touchStartY = null;
+  }, { passive: false });
+
+  // Controles de botão para dispositivos móveis
+  const moveUpBtn = document.getElementById('moveUpBtn');
+  const moveDownBtn = document.getElementById('moveDownBtn');
+  const shootBtn = document.getElementById('shootBtn');
+
+  let moveUpInterval, moveDownInterval;
+
+  moveUpBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      keys['ArrowUp'] = true;
+      moveUpInterval = setInterval(() => {
+          if (gameState === 'playing' && player.y > 0) {
+              player.y -= player.speed;
+          }
+      }, 16);
+  });
+
+  moveUpBtn.addEventListener('touchend', e => {
+      e.preventDefault();
+      keys['ArrowUp'] = false;
+      clearInterval(moveUpInterval);
+  });
+
+  moveDownBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      keys['ArrowDown'] = true;
+      moveDownInterval = setInterval(() => {
+          if (gameState === 'playing' && player.y + player.height < canvas.height) {
+              player.y += player.speed;
+          }
+      }, 16);
+  });
+
+  moveDownBtn.addEventListener('touchend', e => {
+      e.preventDefault();
+      keys['ArrowDown'] = false;
+      clearInterval(moveDownInterval);
+  });
+
+  shootBtn.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (gameState === 'playing') {
+          player.shoot();
+      }
+  });
+
+  // Detectar se é dispositivo móvel para mostrar controles
+  function isMobileDevice() {
+      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || 
+             ('ontouchstart' in window) || 
+             (navigator.maxTouchPoints > 0);
+  }
+
+  if (isMobileDevice()) {
+      document.getElementById('touchControls').style.display = 'flex';
+  }
+
+  // Inicia o loop do jogo
+  loop();
+</script>
+</body>
+</html>
+
